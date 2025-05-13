@@ -24,6 +24,7 @@ const errorMessage = ref<string>('');
 const errorMessageCORS = ref<boolean>(false);
 const formRef = ref<HTMLFormElement>();
 const botEdit = ref<boolean>(false);
+const fileInputRef = ref<HTMLInputElement>();
 const auth = ref<AuthPayload>({
   botName: '',
   url: defaultURL,
@@ -64,6 +65,96 @@ const handleReset = (evt) => {
   evt.preventDefault();
   resetLogin();
 };
+
+const handleImportClick = () => {
+  fileInputRef.value?.click();
+};
+
+const handleFileImport = (event) => {
+  const file = event.target.files[0];
+  if (!file) return;
+  
+  const reader = new FileReader();
+  reader.onload = async (e) => {
+    try {
+      const content = e.target?.result as string;
+      const lines = content.split('\n').filter(line => line.trim());
+      
+      if (lines.length === 0) {
+        errorMessage.value = 'No valid bot configurations found in file.';
+        return;
+      }
+
+      // For progress tracking
+      let successCount = 0;
+      let failCount = 0;
+      
+      // Process each line
+      for (const line of lines) {
+        const parts = line.split('|');
+        if (parts.length >= 4) {
+          const botConfig = {
+            botName: parts[0].trim(),
+            url: parts[1].trim(),
+            username: parts[2].trim(),
+            password: parts[3].trim(),
+          };
+          
+          try {
+            // Add bot to system
+            const botId = botStore.nextBotId;
+            const { login } = useLoginInfo(botId);
+            await login(botConfig);
+            
+            // Add new bot
+            const sortId = Object.keys(botStore.availableBots).length + 1;
+            botStore.addBot({
+              botName: botConfig.botName,
+              botId,
+              botUrl: botConfig.url,
+              sortId: sortId,
+            });
+            
+            successCount++;
+          } catch (error) {
+            console.error(`Failed to add bot: ${botConfig.botName}`, error);
+            failCount++;
+          }
+        }
+      }
+      
+      // Update form with the first valid bot for display
+      if (successCount > 0) {
+        // Select the first bot that was added
+        const firstBotId = Object.keys(botStore.availableBots)[0];
+        if (firstBotId) {
+          botStore.selectBot(firstBotId);
+        }
+        
+        // Show success message
+        errorMessage.value = `Successfully imported ${successCount} bot(s)${failCount > 0 ? `, ${failCount} failed` : ''}.`;
+        emitLoginResult(true);
+        
+        // Refresh UI and go to main page if not in modal
+        botStore.allRefreshFull();
+        
+        if (props.inModal === false) {
+          router.push('/');
+        }
+      } else {
+        errorMessage.value = 'Failed to import any bots. Please check file format.';
+      }
+    } catch (error) {
+      console.error('Import error:', error);
+      errorMessage.value = 'Failed to import bot configurations. Please check file format.';
+    }
+  };
+  reader.readAsText(file);
+  
+  // Reset the file input to allow selecting the same file again
+  event.target.value = '';
+};
+
 const handleSubmit = async () => {
   // Exit when the form isn't valid
   if (!checkFormValidity()) {
@@ -226,6 +317,24 @@ onMounted(() => {
       </Message>
     </div>
     <div class="flex justify-end gap-2 mt-4">
+      <!-- Hidden file input -->
+      <input
+        ref="fileInputRef"
+        type="file"
+        accept=".txt,.csv"
+        class="hidden"
+        @change="handleFileImport"
+      />
+      <Button 
+        label="Import" 
+        severity="secondary" 
+        type="button"
+        @click="handleImportClick"
+      >
+        <template #icon>
+          <i-mdi-file-import />
+        </template>
+      </Button>
       <Button label="Reset" severity="danger" type="reset" />
       <Button
         v-if="inModal"
