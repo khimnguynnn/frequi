@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { useBotStore } from '@/stores/ftbotwrapper';
 import type { ProfitInterface, ComparisonTableItems } from '@/types';
-
+import { onMounted } from 'vue';
+  
 const botStore = useBotStore();
 
 const allToggled = computed<boolean>({
@@ -13,6 +14,12 @@ const allToggled = computed<boolean>({
   },
 });
 
+onMounted(() => {
+  Object.values(botStore.botStores).forEach((bot) => {
+    bot.isSelected = false;
+  });
+});
+  
 const tableItems = computed<ComparisonTableItems[]>(() => {
   const val: ComparisonTableItems[] = [];
   const summary: ComparisonTableItems = {
