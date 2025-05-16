@@ -114,6 +114,11 @@ const tableItems = computed<ComparisonTableItems[]>(() => {
   val.push(summary);
   return val;
 });
+
+// Create a separate computed property to ensure summary is reactive to selection changes
+const selectedBots = computed(() => 
+  Object.keys(botStore.botStores).filter(botId => botStore.botStores[botId].isSelected)
+);
 </script>
 
 <template>
@@ -166,6 +171,12 @@ const tableItems = computed<ComparisonTableItems[]>(() => {
           )}`"
           :stake-currency="(data as unknown as ComparisonTableItems).stakeCurrency"
         />
+        <ProfitPill
+          v-if="data.botId === undefined && selectedBots.length > 0"
+          :profit-ratio="undefined"
+          :profit-abs="(data as unknown as ComparisonTableItems).profitOpen"
+          :stake-currency="(data as unknown as ComparisonTableItems).stakeCurrency"
+        />
       </template>
     </Column>
     <Column header="Closed Profit">
@@ -174,6 +185,12 @@ const tableItems = computed<ComparisonTableItems[]>(() => {
           v-if="data.profitClosed && data.botId != 'Summary' && loadedBots.has(data.botId)"
           :profit-ratio="(data as ComparisonTableItems).profitClosedRatio"
           :profit-abs="(data as ComparisonTableItems).profitClosed"
+          :stake-currency="(data as unknown as ComparisonTableItems).stakeCurrency"
+        />
+        <ProfitPill
+          v-if="data.botId === undefined && selectedBots.length > 0"
+          :profit-ratio="undefined"
+          :profit-abs="(data as unknown as ComparisonTableItems).profitClosed"
           :stake-currency="(data as unknown as ComparisonTableItems).stakeCurrency"
         />
       </template>
