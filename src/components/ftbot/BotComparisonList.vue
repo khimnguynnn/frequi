@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { useBotStore } from '@/stores/ftbotwrapper';
 import type { ProfitInterface, ComparisonTableItems } from '@/types';
-import { onMounted } from 'vue';
+import { onMounted, watch, ref } from 'vue';
   
 const botStore = useBotStore();
+const loadedBots = ref<Set<string>>(new Set());
 
 const allToggled = computed<boolean>({
   get: () => Object.values(botStore.botStores).every((i) => i.isSelected),
@@ -13,6 +14,23 @@ const allToggled = computed<boolean>({
     }
   },
 });
+
+// Watch for changes in bot selection and load data only when selected
+watch(
+  () => Object.values(botStore.botStores).map(bot => bot.isSelected),
+  async () => {
+    // Only load data for selected bots
+    for (const botId in botStore.botStores) {
+      const bot = botStore.botStores[botId];
+      if (bot.isSelected) {
+        await bot.refreshSlow(true);
+        // Mark this bot as having loaded data
+        loadedBots.value.add(botId);
+      }
+    }
+  },
+  { deep: true }
+);
 
 onMounted(() => {
   Object.values(botStore.botStores).forEach((bot) => {
@@ -34,51 +52,65 @@ const tableItems = computed<ComparisonTableItems[]>(() => {
     losses: 0,
   };
 
-  Object.entries(botStore.allProfit).forEach(([k, v]: [k: string, v: ProfitInterface]) => {
-    const allStakes = botStore.allOpenTrades[k].reduce((a, b) => a + b.stake_amount, 0);
-    const profitOpenRatio =
-      botStore.allOpenTrades[k].reduce(
-        (a, b) => a + (b.total_profit_ratio ?? b.profit_ratio) * b.stake_amount,
-        0,
-      ) / allStakes;
-    const profitOpen = botStore.allOpenTrades[k].reduce(
-      (a, b) => a + (b.total_profit_abs ?? b.profit_abs ?? 0),
-      0,
-    );
-
-    // TODO: handle one inactive bot ...
-    val.push({
+  // Add all bots to the table regardless of selection status
+  Object.keys(botStore.botStores).forEach((k) => {
+    const botItem: ComparisonTableItems = {
       botId: k,
       botName: botStore.availableBots[k].botName || botStore.availableBots[k].botId,
-      trades: `${botStore.allOpenTradeCount[k]} / ${
-        botStore.allBotState[k]?.max_open_trades || 'N/A'
-      }`,
-      profitClosed: v.profit_closed_coin,
-      profitClosedRatio: v.profit_closed_ratio || 0,
-      stakeCurrency: botStore.allBotState[k]?.stake_currency || '',
-      profitOpenRatio,
-      profitOpen,
-      wins: v.winning_trades,
-      losses: v.losing_trades,
-      balance: botStore.allBalance[k]?.total_bot ?? botStore.allBalance[k]?.total,
-      stakeCurrencyDecimals: botStore.allBotState[k]?.stake_currency_decimals || 3,
+      trades: '-',
+      profitClosed: 0,
+      profitClosedRatio: 0,
+      stakeCurrency: '',
+      profitOpenRatio: 0,
+      profitOpen: 0,
+      wins: 0,
+      losses: 0,
       isDryRun: botStore.allBotState[k]?.dry_run,
       isOnline: botStore.botStores[k]?.isBotOnline,
-    });
-    if (v.profit_closed_coin !== undefined) {
-      if (botStore.botStores[k].isSelected) {
-        // Summary should only include selected bots
-        summary.profitClosed += v.profit_closed_coin;
-        summary.profitOpen += profitOpen;
-        summary.wins += v.winning_trades;
-        summary.losses += v.losing_trades;
-        // summary.decimals = this.allBotState[k]?.stake_currency_decimals || summary.decimals;
-        // This will always take the last bot's stake currency
-        // And therefore may result in wrong values.
-        summary.stakeCurrency = botStore.allBotState[k]?.stake_currency || summary.stakeCurrency;
+    };
+    
+    // Check if this bot has been loaded before
+    if (loadedBots.value.has(k)) {
+      const v = botStore.allProfit[k];
+      if (v) {
+        const allStakes = botStore.allOpenTrades[k].reduce((a, b) => a + b.stake_amount, 0);
+        const profitOpenRatio = allStakes ? 
+          botStore.allOpenTrades[k].reduce(
+            (a, b) => a + (b.total_profit_ratio ?? b.profit_ratio) * b.stake_amount,
+            0,
+          ) / allStakes : 0;
+        const profitOpen = botStore.allOpenTrades[k].reduce(
+          (a, b) => a + (b.total_profit_abs ?? b.profit_abs ?? 0),
+          0,
+        );
+
+        botItem.trades = `${botStore.allOpenTradeCount[k]} / ${
+          botStore.allBotState[k]?.max_open_trades || 'N/A'
+        }`;
+        botItem.profitClosed = v.profit_closed_coin;
+        botItem.profitClosedRatio = v.profit_closed_ratio || 0;
+        botItem.stakeCurrency = botStore.allBotState[k]?.stake_currency || '';
+        botItem.profitOpenRatio = profitOpenRatio;
+        botItem.profitOpen = profitOpen;
+        botItem.wins = v.winning_trades;
+        botItem.losses = v.losing_trades;
+        botItem.balance = botStore.allBalance[k]?.total_bot ?? botStore.allBalance[k]?.total;
+        botItem.stakeCurrencyDecimals = botStore.allBotState[k]?.stake_currency_decimals || 3;
+
+        // Only add to summary if currently selected
+        if (v.profit_closed_coin !== undefined && botStore.botStores[k].isSelected) {
+          summary.profitClosed += v.profit_closed_coin;
+          summary.profitOpen += profitOpen;
+          summary.wins += v.winning_trades;
+          summary.losses += v.losing_trades;
+          summary.stakeCurrency = botStore.allBotState[k]?.stake_currency || summary.stakeCurrency;
+        }
       }
     }
+    
+    val.push(botItem);
   });
+  
   val.push(summary);
   return val;
 });
@@ -126,20 +158,20 @@ const tableItems = computed<ComparisonTableItems[]>(() => {
     <Column header="Open Profit">
       <template #body="{ data }">
         <ProfitPill
-          v-if="data.profitOpen && data.botId != 'Summary'"
+          v-if="data.profitOpen && data.botId != 'Summary' && loadedBots.has(data.botId)"
           :profit-ratio="(data as unknown as ComparisonTableItems).profitOpenRatio"
           :profit-abs="(data as unknown as ComparisonTableItems).profitOpen"
           :profit-desc="`Total Profit (Open and realized) ${formatPercent(
             (data as ComparisonTableItems).profitOpenRatio ?? 0.0,
           )}`"
-          :stake-currency="(data as ComparisonTableItems).stakeCurrency"
+          :stake-currency="(data as unknown as ComparisonTableItems).stakeCurrency"
         />
       </template>
     </Column>
     <Column header="Closed Profit">
       <template #body="{ data }">
         <ProfitPill
-          v-if="data.profitClosed && data.botId != 'Summary'"
+          v-if="data.profitClosed && data.botId != 'Summary' && loadedBots.has(data.botId)"
           :profit-ratio="(data as ComparisonTableItems).profitClosedRatio"
           :profit-abs="(data as ComparisonTableItems).profitClosed"
           :stake-currency="(data as unknown as ComparisonTableItems).stakeCurrency"
@@ -148,7 +180,7 @@ const tableItems = computed<ComparisonTableItems[]>(() => {
     </Column>
     <Column field="balance" header="Balance">
       <template #body="{ data }">
-        <div v-if="data.balance">
+        <div v-if="data.balance && loadedBots.has(data.botId)">
           <span :title="(data as ComparisonTableItems).stakeCurrency"
             >{{
               formatPrice(
@@ -165,7 +197,7 @@ const tableItems = computed<ComparisonTableItems[]>(() => {
     </Column>
     <Column field="winVsLoss" header="W/L">
       <template #body="{ data }">
-        <div v-if="data.losses !== undefined">
+        <div v-if="data.losses !== undefined && (data.botId === undefined || loadedBots.has(data.botId))">
           <span class="text-profit">{{ data.wins }}</span> /
           <span class="text-loss">{{ data.losses }}</span>
         </div>
